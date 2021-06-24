@@ -45,7 +45,7 @@ defmodule Swoosh.Adapters.MailgunTest do
     assert Mailgun.deliver(email, config) == {:ok, %{id: "<20111114174239.25659.5817@samples.mailgun.org>"}}
   end
 
-  test "delivery/1 with all fields returns :ok", %{bypass: bypass, config: config} do
+  test "deliver/1 with all fields returns :ok", %{bypass: bypass, config: config} do
     email =
       new()
       |> from({"T Stark", "tony.stark@example.com"})
@@ -73,7 +73,7 @@ defmodule Swoosh.Adapters.MailgunTest do
                       "from" => ~s("T Stark" <tony.stark@example.com>),
                       "text" => "Hello",
                       "html" => "<h1>Hello</h1>",
-                      "v:key" => "value",
+                      "h:X-Mailgun-Variables" => "{\"key\":\"value\"}",
                       "template" => "avengers-templates"}
       assert body_params == conn.body_params
       assert expected_path == conn.request_path
@@ -85,14 +85,14 @@ defmodule Swoosh.Adapters.MailgunTest do
     assert Mailgun.deliver(email, config) == {:ok, %{id: "<20111114174239.25659.5817@samples.mailgun.org>"}}
   end
 
-  test "delivery/1 with custom variables returns :ok", %{bypass: bypass, config: config} do
+  test "deliver/1 with custom variables returns :ok", %{bypass: bypass, config: config} do
     email =
       new()
       |> from("tony.stark@example.com")
       |> to("steve.rogers@example.com")
       |> subject("Hello, Avengers!")
       |> html_body("<h1>Hello</h1>")
-      |> put_provider_option(:custom_vars, %{my_var: %{my_message_id: 123}, my_other_var: %{my_other_id: 1, stuff: 2}})
+      |> put_provider_option(:custom_vars, %{my_var: [%{my_message_id: 123}], my_other_var: %{my_other_id: 1, stuff: 2}})
 
     Bypass.expect bypass, fn conn ->
       conn = parse(conn)
@@ -101,8 +101,7 @@ defmodule Swoosh.Adapters.MailgunTest do
                       "to" => "steve.rogers@example.com",
                       "from" => "tony.stark@example.com",
                       "html" => "<h1>Hello</h1>",
-                      "v:my_var" => "{\"my_message_id\":123}",
-                      "v:my_other_var" => "{\"my_other_id\":1,\"stuff\":2}"}
+                      "h:X-Mailgun-Variables" => "{\"my_other_var\":{\"my_other_id\":1,\"stuff\":2},\"my_var\":[{\"my_message_id\":123}]}"}
       assert body_params == conn.body_params
       assert expected_path == conn.request_path
       assert "POST" == conn.method
@@ -113,7 +112,35 @@ defmodule Swoosh.Adapters.MailgunTest do
     assert Mailgun.deliver(email, config) == {:ok, %{id: "<20111114174239.25659.5817@samples.mailgun.org>"}}
   end
 
-  test "delivery/1 with recipient variables returns :ok", %{bypass: bypass, config: config} do
+  test "deliver/1 with sending options returns :ok", %{bypass: bypass, config: config} do
+    email =
+      new()
+      |> from("tony.stark@example.com")
+      |> to("steve.rogers@example.com")
+      |> subject("Hello, Avengers!")
+      |> html_body("<h1>Hello</h1>")
+      |> put_provider_option(:sending_options, %{dkim: "yes", tracking: "no"})
+
+    Bypass.expect bypass, fn conn ->
+      conn = parse(conn)
+      expected_path = "/" <> config[:domain] <> "/messages"
+      body_params = %{"subject" => "Hello, Avengers!",
+                      "to" => "steve.rogers@example.com",
+                      "from" => "tony.stark@example.com",
+                      "html" => "<h1>Hello</h1>",
+                      "o:dkim" => "yes",
+                      "o:tracking" => "no"}
+      assert body_params == conn.body_params
+      assert expected_path == conn.request_path
+      assert "POST" == conn.method
+
+      Plug.Conn.resp(conn, 200, @success_response)
+    end
+
+    assert Mailgun.deliver(email, config) == {:ok, %{id: "<20111114174239.25659.5817@samples.mailgun.org>"}}
+  end
+
+  test "deliver/1 with recipient variables returns :ok", %{bypass: bypass, config: config} do
     email =
       new()
       |> from("tony.stark@example.com")
@@ -140,7 +167,7 @@ defmodule Swoosh.Adapters.MailgunTest do
     assert Mailgun.deliver(email, config) == {:ok, %{id: "<20111114174239.25659.5817@samples.mailgun.org>"}}
   end
 
-  test "delivery/1 with tags returns :ok", %{bypass: bypass, config: config} do
+  test "deliver/1 with tags returns :ok", %{bypass: bypass, config: config} do
     email =
       new()
       |> from("tony.stark@example.com")
@@ -167,7 +194,7 @@ defmodule Swoosh.Adapters.MailgunTest do
     assert Mailgun.deliver(email, config) == {:ok, %{id: "<20111114174239.25659.5817@samples.mailgun.org>"}}
   end
 
-  test "delivery/1 with custom headers returns :ok", %{bypass: bypass, config: config} do
+  test "deliver/1 with custom headers returns :ok", %{bypass: bypass, config: config} do
     email =
       new()
       |> from("tony.stark@example.com")
@@ -198,7 +225,7 @@ defmodule Swoosh.Adapters.MailgunTest do
     assert Mailgun.deliver(email, config) == {:ok, %{id: "<20111114174239.25659.5817@samples.mailgun.org>"}}
   end
 
-  test "delivery/1 with 4xx response", %{bypass: bypass, config: config, valid_email: email} do
+  test "deliver/1 with 4xx response", %{bypass: bypass, config: config, valid_email: email} do
     Bypass.expect bypass, fn conn ->
       Plug.Conn.resp(conn, 401, "Forbidden")
     end

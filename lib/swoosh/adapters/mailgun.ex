@@ -2,7 +2,7 @@ defmodule Swoosh.Adapters.Mailgun do
   @moduledoc ~S"""
   An adapter that sends email using the Mailgun API.
 
-  For reference: [Mailgun API docs](https://documentation.mailgun.com/api-sending.html#sending)
+  For reference: [Mailgun API docs](https://documentation.mailgun.com/en/latest/api-sending.html#sending)
 
   ## Dependency
 
@@ -23,10 +23,15 @@ defmodule Swoosh.Adapters.Mailgun do
 
   ## Provider options
 
-  - :template_name
-  - :custom_vars
-  - :recipient_vars
-  - :tags
+  - `:custom_vars` (used to translate to `v:`, now `h:X-Mailgun-Variables`)
+  - `:sending_options` (`o:`)
+  - `:template_name` (template)
+  - `:recipient_vars` (recipient-variables)
+  - `:tags` (`o:tag`, was added in before `:sending_options`)
+
+  ## Custom headers
+
+  Headers added via `Email.header/3` will be translated to (h:) values that Mailgun recognizes.
   """
 
   use Swoosh.Adapter, required_config: [:api_key, :domain], required_deps: [plug: Plug.Conn.Query]
@@ -37,6 +42,7 @@ defmodule Swoosh.Adapters.Mailgun do
   @base_url "https://api.mailgun.net/v3"
   @api_endpoint "/messages"
 
+  @impl true
   def deliver(%Email{} = email, config \\ []) do
     headers = prepare_headers(email, config)
     url = [base_url(config), "/", config[:domain], @api_endpoint]
@@ -45,14 +51,11 @@ defmodule Swoosh.Adapters.Mailgun do
       {:ok, 200, _headers, body} ->
         {:ok, %{id: Swoosh.json_library().decode!(body)["id"]}}
 
-      {:ok, 401, _headers, body} ->
-        {:error, {401, body}}
-
-      {:ok, code, _headers, ""} when code > 399 ->
-        {:error, {code, ""}}
-
       {:ok, code, _headers, body} when code > 399 ->
-        {:error, {code, Swoosh.json_library().decode!(body)}}
+        case Swoosh.json_library().decode(body) do
+          {:ok, error} -> {:error, {code, error}}
+          {:error, _} -> {:error, {code, body}}
+        end
 
       {:error, reason} ->
         {:error, reason}
@@ -86,6 +89,7 @@ defmodule Swoosh.Adapters.Mailgun do
     |> prepare_reply_to(email)
     |> prepare_attachments(email)
     |> prepare_custom_vars(email)
+    |> prepare_sending_options(email)
     |> prepare_recipient_vars(email)
     |> prepare_tags(email)
     |> prepare_custom_headers(email)
@@ -93,17 +97,19 @@ defmodule Swoosh.Adapters.Mailgun do
     |> encode_body()
   end
 
-  # example custom_vars
-  #
-  # %{"my_var" => %{"my_message_id": 123},
-  #   "my_other_var" => %{"my_other_id": 1, "stuff": 2}}
   defp prepare_custom_vars(body, %{provider_options: %{custom_vars: custom_vars}}) do
-    Enum.reduce(custom_vars, body, fn {k, v}, body ->
-      Map.put(body, "v:#{k}", encode_variable(v))
-    end)
+    Map.put(body, "h:X-Mailgun-Variables", Swoosh.json_library().encode!(custom_vars))
   end
 
   defp prepare_custom_vars(body, _email), do: body
+
+  defp prepare_sending_options(body, %{provider_options: %{sending_options: sending_options}}) do
+    Enum.reduce(sending_options, body, fn {k, v}, body ->
+      Map.put(body, "o:#{k}", encode_variable(v))
+    end)
+  end
+
+  defp prepare_sending_options(body, _email), do: body
 
   defp prepare_recipient_vars(body, %{provider_options: %{recipient_vars: recipient_vars}}) do
     Map.put(body, "recipient-variables", encode_variable(recipient_vars))
@@ -166,7 +172,8 @@ defmodule Swoosh.Adapters.Mailgun do
   defp prepare_html(body, %{html_body: nil}), do: body
   defp prepare_html(body, %{html_body: html_body}), do: Map.put(body, :html, html_body)
 
-  defp prepare_template(body, %{provider_options: %{template_name: template_name}}), do: Map.put(body, "template", template_name)
+  defp prepare_template(body, %{provider_options: %{template_name: template_name}}),
+    do: Map.put(body, "template", template_name)
 
   defp prepare_template(body, _), do: body
 
@@ -181,6 +188,8 @@ defmodule Swoosh.Adapters.Mailgun do
 
   defp encode_body(no_attachments), do: Plug.Conn.Query.encode(no_attachments)
 
-  defp encode_variable(var) when is_map(var) or is_list(var), do: Swoosh.json_library().encode!(var)
+  defp encode_variable(var) when is_map(var) or is_list(var),
+    do: Swoosh.json_library().encode!(var)
+
   defp encode_variable(var), do: var
 end
